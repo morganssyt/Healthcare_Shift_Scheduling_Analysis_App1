@@ -1,6 +1,7 @@
 # Healthcare Shift Scheduling App
 
-A Streamlit web app for generating 5-week staff rosters with constraint handling, scenario comparison, and multiple export formats.
+A Python designed web app for generating 5-week staff rosters with constraint handling, scenario comparison, and multiple export formats.
+Started from my Data Analysis with the Red Cross.
 
 ## What it does
 
