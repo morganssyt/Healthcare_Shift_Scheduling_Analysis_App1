@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Output generati
+output/
+figures/
+
+# File locali CLI (non servono per Streamlit)
+data/
+scripts/
+
+# File temporanei
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# File markdown non necessari per deploy
+ANALISI_FINALE.md
+GUIDA_POWER_BI.md
+REPORT_PDF_OUTLINE.md
+TESTO_PORTFOLIO.md
+
+# CLI pipeline (non serve per Streamlit app)
+main.py
