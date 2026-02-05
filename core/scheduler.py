@@ -1,7 +1,10 @@
 """
 Scheduler per generazione turni con rotazione settimanale bilanciata.
+Supporta randomizzazione controllata per variazione nei turni.
 """
 import pandas as pd
+import random
+import math
 from datetime import date, timedelta
 from typing import List, Dict, Optional
 from dataclasses import dataclass, field
@@ -240,17 +243,67 @@ def is_candidate_eligible(
     return True
 
 
+def weighted_random_choice(candidates_scored: List[tuple], randomness: float, top_k: int = 3) -> 'PersonState':
+    """
+    Seleziona un candidato usando weighted random tra i top-K.
+    randomness=0 -> sempre il migliore (deterministico)
+    randomness=1 -> selezione molto casuale tra i top-K
+    """
+    if len(candidates_scored) == 1 or randomness == 0:
+        return candidates_scored[0][0]
+
+    # Prendi i top-K candidati
+    k = min(top_k, len(candidates_scored))
+    top_candidates = candidates_scored[:k]
+
+    # Converti score in pesi (score basso = peso alto)
+    # Usa softmax-like con temperatura controllata da randomness
+    scores = [c[1] for c in top_candidates]
+    min_score = min(scores)
+    max_score = max(scores)
+
+    # Normalizza e inverti (score basso -> peso alto)
+    if max_score == min_score:
+        weights = [1.0] * k
+    else:
+        # Temperatura: randomness basso = preferenza forte per il migliore
+        temperature = 0.1 + randomness * 2.0
+        weights = []
+        for score in scores:
+            # Inverti: migliore (score basso) -> peso alto
+            normalized = (max_score - score) / (max_score - min_score + 0.001)
+            weight = math.exp(normalized / temperature)
+            weights.append(weight)
+
+    # Normalizza pesi
+    total = sum(weights)
+    weights = [w / total for w in weights]
+
+    # Selezione pesata
+    r = random.random()
+    cumulative = 0
+    for i, w in enumerate(weights):
+        cumulative += w
+        if r <= cumulative:
+            return top_candidates[i][0]
+
+    return top_candidates[-1][0]
+
+
 def assign_slot(
     slot: Slot,
     people: List[PersonState],
     vincoli: dict,
     day_assignments: Dict[str, str],
-    usa_volontario: bool
+    usa_volontario: bool,
+    randomness: float = 0.0
 ) -> List[str]:
     """
     Assegna persone a uno slot. Ritorna lista nomi assegnati.
+    randomness controlla la variazione (0=deterministico, 1=molto casuale).
     """
     assigned = []
+    top_k = max(3, len(people) // 2)  # Adatta K alla dimensione staff
 
     while slot.remaining > 0:
         # Trova candidati eleggibili
@@ -270,13 +323,15 @@ def assign_slot(
                 assigned.append(UNCOVERED)
             continue
 
-        # Calcola score e scegli il migliore
+        # Calcola score e ordina
         candidates_scored = [
             (p, calc_candidate_score(p, slot, people, vincoli))
             for p in candidates
         ]
         candidates_scored.sort(key=lambda x: x[1])
-        best = candidates_scored[0][0]
+
+        # Selezione con randomness
+        best = weighted_random_choice(candidates_scored, randomness, top_k)
 
         # Assegna
         slot.assigned.append(best.name)
@@ -299,11 +354,21 @@ def genera_turnazione(
     data_inizio: date,
     num_weeks: int,
     vincoli: dict,
-    usa_volontario: bool = True
+    usa_volontario: bool = True,
+    randomness: float = 0.0,
+    seed: Optional[int] = None
 ) -> dict:
     """
     Genera la turnazione per il periodo richiesto.
+
+    Args:
+        randomness: 0.0 = deterministico, 1.0 = massima variazione
+        seed: se fornito, rende la generazione riproducibile
     """
+    # Imposta seed per riproducibilità
+    if seed is not None:
+        random.seed(seed)
+
     # Inizializza stato persone
     people = []
     for _, row in staff.iterrows():
@@ -328,6 +393,14 @@ def genera_turnazione(
         # Raggruppa per giorno
         days_in_week = sorted(set(s.date for s in week_slots))
 
+        # Shuffle giorni (eccetto domenica che resta ultima) se randomness > 0
+        if randomness > 0.3 and len(days_in_week) > 1:
+            non_sunday = [d for d in days_in_week if d.weekday() != 6]
+            sunday = [d for d in days_in_week if d.weekday() == 6]
+            if randomness > 0.5:
+                random.shuffle(non_sunday)
+            days_in_week = non_sunday + sunday
+
         for current_date in days_in_week:
             # Aggiorna flag notte
             update_night_flags(people, current_date)
@@ -336,11 +409,19 @@ def genera_turnazione(
             day_slots = [s for s in week_slots if s.date == current_date]
             day_assignments: Dict[str, str] = {}
 
-            # Ordine: notte prima (così il riposo funziona), poi mattino, poi pomeriggio
+            # Ordine base: notte prima (così il riposo funziona), poi mattino, poi pomeriggio
             day_slots.sort(key=lambda s: {'night': 0, 'morning': 1, 'afternoon': 2}[s.shift_type])
 
+            # Leggero shuffle mattino/pomeriggio se randomness alto
+            if randomness > 0.6 and len(day_slots) >= 2:
+                non_night = [s for s in day_slots if s.shift_type != 'night']
+                night = [s for s in day_slots if s.shift_type == 'night']
+                if random.random() < randomness * 0.5:
+                    random.shuffle(non_night)
+                day_slots = night + non_night
+
             for slot in day_slots:
-                assign_slot(slot, people, vincoli, day_assignments, usa_volontario)
+                assign_slot(slot, people, vincoli, day_assignments, usa_volontario, randomness)
 
     # Costruisci output DataFrame calendario
     calendario_rows = []

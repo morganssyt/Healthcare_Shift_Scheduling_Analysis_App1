@@ -9,7 +9,10 @@ Supporta confronto versioni:
 """
 import streamlit as st
 import pandas as pd
+import random
+import matplotlib.pyplot as plt
 from datetime import date, timedelta
+from io import BytesIO
 from core.utils import (
     get_default_staff,
     validate_staff,
@@ -104,6 +107,29 @@ def mostra_versione(nome_versione: str, risultato: dict, vincoli: dict,
                      use_container_width=True, hide_index=True)
         st.caption(f"Scostamento max-min: **{meta['scostamento_ore']}h**")
 
+        # Grafico ore per persona
+        fig, ax = plt.subplots(figsize=(8, 4))
+        names = summary_df['Nome'].tolist()
+        hours = summary_df['Ore totali'].tolist()
+        targets = summary_df['Target (5 sett)'].tolist()
+
+        x = range(len(names))
+        width = 0.35
+
+        bars1 = ax.bar([i - width/2 for i in x], hours, width, label='Ore assegnate')
+        bars2 = ax.bar([i + width/2 for i in x], targets, width, label='Target', alpha=0.6)
+
+        ax.set_ylabel('Ore')
+        ax.set_title('Ore assegnate vs Target (5 settimane)')
+        ax.set_xticks(list(x))
+        ax.set_xticklabels([n.split()[0] for n in names], rotation=45, ha='right')
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+
     # Download
     date_str = data_inizio.strftime('%Y%m%d')
     file_base = f"turnazione_{date_str}_{nome_versione.lower().replace(' ', '_').replace('+', 'plus')}"
@@ -170,6 +196,25 @@ if notte_attiva:
         default=['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì']
     )
     min_notte = st.sidebar.number_input("Min persone notte", min_value=1, max_value=5, value=1)
+
+st.sidebar.divider()
+st.sidebar.subheader("Variazione turni")
+
+randomness = st.sidebar.slider(
+    "Randomness",
+    min_value=0.0, max_value=1.0, value=0.3, step=0.1,
+    help="0 = deterministico, 1 = massima variazione nei turni"
+)
+
+use_fixed_seed = st.sidebar.toggle("Usa seed fisso", value=False, help="Per risultati riproducibili")
+
+if use_fixed_seed:
+    seed_value = st.sidebar.number_input("Seed", min_value=0, max_value=99999, value=42)
+else:
+    # Genera seed casuale e salvalo in session_state
+    if 'current_seed' not in st.session_state:
+        st.session_state.current_seed = random.randint(0, 99999)
+    seed_value = st.session_state.current_seed
 
 # --- Sezione principale ---
 col_left, col_right = st.columns([2, 1])
@@ -266,9 +311,20 @@ with st.expander("Riepilogo fabbisogno ore", expanded=True):
 
 # --- Genera turnazione ---
 st.divider()
-genera_btn = st.button("Genera turnazione", type="primary", disabled=not is_valid, use_container_width=True)
 
-if genera_btn and is_valid:
+col_gen, col_regen = st.columns([3, 1])
+with col_gen:
+    genera_btn = st.button("Genera turnazione", type="primary", disabled=not is_valid, use_container_width=True)
+with col_regen:
+    rigenera_btn = st.button("Rigenera", disabled=not is_valid, use_container_width=True,
+                              help="Genera una variante diversa con nuovo seed")
+
+# Se rigenera, cambia il seed
+if rigenera_btn and not use_fixed_seed:
+    st.session_state.current_seed = random.randint(0, 99999)
+    seed_value = st.session_state.current_seed
+
+if (genera_btn or rigenera_btn) and is_valid:
     vincoli = {
         'min_mattino_lun_sab': min_mattino,
         'min_pomeriggio_lun_sab': min_pomeriggio,
@@ -287,7 +343,8 @@ if genera_btn and is_valid:
 
         # Versione A: Staff attuale
         versioni['A - Staff attuale'] = genera_turnazione(
-            staff_base, data_inizio, 5, vincoli, usa_volontario
+            staff_base, data_inizio, 5, vincoli, usa_volontario,
+            randomness=randomness, seed=seed_value
         )
 
         # Se c'è un nuovo dipendente, genera anche B e C
@@ -298,7 +355,10 @@ if genera_btn and is_valid:
             staff_b, err_b = add_employee(staff_base, nuovo_nome_clean, nuove_ore, nuovo_puo_notte, nuovo_puo_dom)
             if not err_b:
                 label_b = f"B - +{nuovo_nome_clean} ({nuove_ore}h)"
-                versioni[label_b] = genera_turnazione(staff_b, data_inizio, 5, vincoli, usa_volontario)
+                versioni[label_b] = genera_turnazione(
+                    staff_b, data_inizio, 5, vincoli, usa_volontario,
+                    randomness=randomness, seed=seed_value + 1
+                )
 
             # Versione C: alternativa
             if tipo_contratto == 'PT 28h':
@@ -314,12 +374,14 @@ if genera_btn and is_valid:
                 # Versione C1: PT
                 staff_c1, _ = add_employee(staff_base, nuovo_nome_clean, 28, nuovo_puo_notte, nuovo_puo_dom)
                 versioni[f"C1 - +{nuovo_nome_clean} (PT 28h)"] = genera_turnazione(
-                    staff_c1, data_inizio, 5, vincoli, usa_volontario
+                    staff_c1, data_inizio, 5, vincoli, usa_volontario,
+                    randomness=randomness, seed=seed_value + 2
                 )
                 # Versione C2: FT
                 staff_c2, _ = add_employee(staff_base, nuovo_nome_clean, 38, nuovo_puo_notte, nuovo_puo_dom)
                 versioni[f"C2 - +{nuovo_nome_clean} (FT 38h)"] = genera_turnazione(
-                    staff_c2, data_inizio, 5, vincoli, usa_volontario
+                    staff_c2, data_inizio, 5, vincoli, usa_volontario,
+                    randomness=randomness, seed=seed_value + 3
                 )
                 ore_alt = None  # Skip versione C singola
 
@@ -327,9 +389,13 @@ if genera_btn and is_valid:
                 staff_c, err_c = add_employee(staff_base, nuovo_nome_clean, ore_alt, nuovo_puo_notte, nuovo_puo_dom)
                 if not err_c:
                     label_c = f"C - +{nuovo_nome_clean} ({label_alt})"
-                    versioni[label_c] = genera_turnazione(staff_c, data_inizio, 5, vincoli, usa_volontario)
+                    versioni[label_c] = genera_turnazione(
+                        staff_c, data_inizio, 5, vincoli, usa_volontario,
+                        randomness=randomness, seed=seed_value + 4
+                    )
 
     st.success(f"Generate {len(versioni)} versioni!")
+    st.caption(f"Seed usato: **{seed_value}** | Randomness: **{randomness}**")
 
     # --- Tabella comparativa ---
     st.subheader("Confronto versioni")

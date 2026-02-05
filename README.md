@@ -1,201 +1,97 @@
-# Pianificazione Turni - Croce Rossa
+# Healthcare Shift Scheduling App
 
-App web per generare la turnazione del personale sanitario su 5 settimane, con confronto scenari e export in più formati.
+A Streamlit web app for generating 5-week staff rosters with constraint handling, scenario comparison, and multiple export formats.
 
-![Streamlit](https://img.shields.io/badge/Streamlit-1.30+-red.svg)
-![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
+## What it does
 
----
+- **Generates shift schedules** respecting constraints: weekly hours, max consecutive days, rest after night shifts, Sunday availability
+- **Balances workload** automatically across employees (morning/afternoon/night/weekend distribution)
+- **Compares scenarios**: current staff vs. hiring a new employee (part-time 28h or full-time 38h)
+- **Fills gaps** with "Expert Volunteer" when internal coverage isn't enough
+- **Exports** to CSV, Excel, and print-ready PDF
+- **Visualizes** hours distribution with a simple bar chart
 
-## Cosa fa
+## Project context
 
-- **Genera turnazioni** rispettando vincoli (ore contrattuali, giorni consecutivi, riposo dopo notte)
-- **Bilancia automaticamente** il carico tra dipendenti (mattini, pomeriggi, domeniche, notti)
-- **Confronta scenari**: staff attuale vs. aggiunta di un nuovo dipendente (PT 28h o FT 38h)
-- **Esporta** in CSV, Excel e PDF stampabile
-- **Segnala carenze**: evidenzia quando serve "Volontario esperto" o turni scoperti
+This tool addresses a common challenge in healthcare and emergency services: building fair, constraint-compliant rosters when staff is limited. It's particularly useful for small teams where manual scheduling becomes error-prone and time-consuming.
 
----
+The app lets managers quickly test "what-if" scenarios (e.g., "What if we hire a part-timer?") and see the impact on coverage and volunteer dependency.
 
-## Quick Start
+## Run locally
 
 ```bash
-cd rotazione_turni
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-L'app si apre nel browser su `http://localhost:8501`
+Opens at `http://localhost:8501`
 
----
+## Deploy on Streamlit Cloud
 
-## Come usarlo
+1. Push this repo to GitHub
+2. Go to [share.streamlit.io](https://share.streamlit.io)
+3. Click **New app** → select your repo → branch `main` → file `app.py`
+4. Click **Deploy**
 
-### 1. Configura
+That's it. Streamlit auto-detects `requirements.txt`.
 
-**Sidebar (sinistra):**
-- Data inizio (deve essere un lunedì)
-- Toggle "Usa Volontario esperto" (default ON)
-- Toggle "Notte attiva" + giorni e minimo persone
+## How to use
 
-**Sezione principale:**
-- Modifica lo staff nella tabella (nome, ore, disponibilità notte/domenica)
-- Imposta i vincoli di copertura (min persone per turno)
+**Sidebar:**
+- Set start date (must be a Monday)
+- Toggle "Expert Volunteer" fallback
+- Toggle night shifts and select which days
+- Adjust **Randomness** slider (0 = deterministic, 1 = more variation)
+- Use fixed seed for reproducible results
 
-### 2. Confronta scenari (opzionale)
+**Main panel:**
+- Edit staff table (name, weekly hours, night/Sunday availability)
+- Set coverage constraints (min staff per shift)
+- Optionally add a new employee for scenario comparison
+- Click **Generate** or **Regenerate** for a different variant
 
-Compila "Nuovo dipendente" per generare automaticamente:
-- **Versione A**: staff attuale
-- **Versione B**: staff + nuovo con ore scelte
-- **Versione C**: staff + nuovo con ore alternative (PT vs FT)
+**Outputs:**
+- Comparison table across scenarios
+- Weekly calendar view with highlighted gaps
+- Hours summary per person with bar chart
+- Download buttons: CSV, Excel, PDF
 
-### 3. Genera e scarica
+## Outputs
 
-Clicca "Genera turnazione" per:
-- Vedere la tabella comparativa
-- Leggere il testo "Cosa cambia"
-- Scaricare CSV/Excel/PDF per ogni versione
+| Format | Content |
+|--------|---------|
+| CSV | One row per shift assignment (date, shift, assignee) |
+| Excel | Two sheets: Calendar + Summary |
+| PDF | Print-ready report with weekly tables and KPIs |
+| Chart | Bar chart comparing assigned hours vs. target |
 
----
-
-## Struttura progetto
+## Project structure
 
 ```
-├── app.py              # App Streamlit principale
+├── app.py              # Streamlit UI
 ├── core/
-│   ├── __init__.py
-│   ├── scheduler.py    # Algoritmo di scheduling
-│   ├── exporters.py    # Export CSV, Excel, PDF
-│   └── utils.py        # Validazioni e helpers
-├── requirements.txt    # Dipendenze Python
-└── README.md           # Questo file
+│   ├── scheduler.py    # Scheduling algorithm with randomization
+│   ├── exporters.py    # CSV, Excel, PDF export
+│   └── utils.py        # Validation and helpers
+├── analysis/           # Problem analysis documentation
+├── requirements.txt
+└── README.md
 ```
 
----
+## Documentation
 
-## Regole di scheduling
+See the [analysis/](analysis/) folder for detailed documentation:
+- [Problem Analysis](analysis/Problem_Analysis.md) - Context and approach
+- [Constraints and Assumptions](analysis/Constraints_and_Assumptions.md) - Rules and parameters
 
-| Regola | Descrizione |
-|--------|-------------|
-| Max 1 turno/giorno | Nessuno lavora mattino E pomeriggio lo stesso giorno |
-| Max giorni consecutivi | Default 6, configurabile |
-| Limite ore settimanali | Non si superano le ore contrattuali |
-| Riposo dopo notte | Chi fa notte non lavora il giorno dopo |
-| Domenica | Solo chi è disponibile |
-| Notte | Solo chi è abilitato |
+## Tech stack
 
----
+Python, Streamlit, Pandas, Matplotlib, ReportLab, OpenPyXL
 
-## Algoritmo di bilanciamento
+## Author
 
-Lo scheduler usa uno **scoring system** per scegliere chi assegnare:
-
-1. Chi ha meno ore totali → priorità alta
-2. Chi ha meno ore questa settimana → priorità
-3. Chi ha meno turni di quel tipo (mattino/pomeriggio) → equilibrio
-4. Chi ha meno domeniche → distribuzione equa
-5. Penalità se vicino al limite consecutivi
-6. Leggera penalità se ha lavorato ieri (alternanza)
+Morgan Germinario
 
 ---
 
-## Deploy su Streamlit Community Cloud
-
-### Preparazione repository
-
-1. **Crea un repo GitHub** (pubblico o privato)
-
-2. **Carica questi file**:
-   ```
-   app.py
-   requirements.txt
-   core/
-   ├── __init__.py
-   ├── scheduler.py
-   ├── exporters.py
-   └── utils.py
-   ```
-
-3. **Verifica requirements.txt**:
-   ```
-   streamlit>=1.30.0
-   pandas>=2.0.0
-   openpyxl>=3.1.0
-   reportlab>=4.0.0
-   ```
-
-### Deploy
-
-1. Vai su [share.streamlit.io](https://share.streamlit.io)
-2. Accedi con GitHub
-3. Clicca "New app"
-4. Seleziona:
-   - Repository: `tuouser/rotazione-turni`
-   - Branch: `main`
-   - Main file path: `app.py`
-5. Clicca "Deploy"
-
-Streamlit rileva automaticamente `app.py` e `requirements.txt`.
-
-### Note importanti per il cloud
-
-- **Nessun file locale**: l'app usa solo memoria (BytesIO), non scrive su disco
-- **Nessun database**: tutto è calcolato on-the-fly
-- **Session state**: i dati persistono solo durante la sessione browser
-- **File temporanei**: gli export usano buffer in memoria, compatibili con il cloud
-
-### Test locale prima del deploy
-
-```bash
-# Installa dipendenze
-pip install -r requirements.txt
-
-# Avvia in modalità "produzione"
-streamlit run app.py --server.headless true
-
-# Verifica che funzioni su http://localhost:8501
-```
-
-### Errori comuni e fix
-
-| Errore | Causa | Soluzione |
-|--------|-------|-----------|
-| `ModuleNotFoundError: openpyxl` | Manca in requirements.txt | Aggiungi `openpyxl>=3.1.0` |
-| `ModuleNotFoundError: reportlab` | Manca in requirements.txt | Aggiungi `reportlab>=4.0.0` |
-| `No module named 'core'` | Struttura cartelle sbagliata | Verifica che `core/` sia nella root |
-| App non si avvia | File path sbagliato | Main file deve essere `app.py` |
-| Crash su download | Scrittura su disco | Usa solo BytesIO (già implementato) |
-
-### URL finale
-
-Dopo il deploy, l'app sarà disponibile su:
-```
-https://tuouser-rotazione-turni-app-xxxxx.streamlit.app
-```
-
----
-
-## Screenshot suggeriti
-
-Per documentazione/portfolio, cattura:
-
-1. **Schermata principale** con staff e vincoli
-2. **Tabella comparativa** dopo generazione
-3. **Sezione "Cosa cambia"** con raccomandazione
-4. **Tab dettaglio** con calendario settimanale
-5. **PDF esportato** (screenshot della prima pagina)
-
----
-
-## Crediti
-
-Sviluppato per Croce Rossa - Sistema Pianificazione Turni
-
-**Tecnologie**: Python, Streamlit, Pandas, ReportLab, OpenPyXL
-
-**Autore**: Morgan Germinario
-
----
-
-*Ultimo aggiornamento: Febbraio 2026*
+*Last updated: February 2026*
