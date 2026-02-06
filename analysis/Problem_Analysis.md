@@ -2,7 +2,7 @@
 
 ## Operational Context
 
-This project addresses staff scheduling for a healthcare/emergency services organization operating 7 days a week. The team consists of 5 employees with different contract types (full-time 38h/week, part-time 28h/week) who must cover morning and afternoon shifts daily, with optional night shifts on selected days.
+This project addresses staff scheduling for a healthcare/emergency services organization operating 7 days a week. The team consists of employees with different contract types (full-time 38h/week, part-time 28h/week) who must cover morning and afternoon shifts daily, with optional night shifts on selected days.
 
 The organization relies on a mix of permanent staff and external volunteers ("Expert Volunteers") to ensure full coverage. The goal is to minimize volunteer dependency while maintaining fair workload distribution among employees.
 
@@ -27,7 +27,6 @@ Staff scheduling in healthcare is a classic constraint satisfaction problem. Sev
 Manual scheduling becomes impractical when:
 - The planning horizon extends to 5 weeks
 - Multiple constraint types interact
-- Management wants to compare different staffing scenarios
 - The schedule needs frequent regeneration
 
 ## What the Tool Outputs
@@ -37,24 +36,21 @@ The app produces a complete 5-week roster with:
 1. **Calendar view**: Daily assignments by shift type (morning, afternoon, optional night)
 2. **Coverage analysis**: Identifies shifts that require external volunteers
 3. **Fairness metrics**: Hours worked, shift type distribution, weekend count per person
-4. **Scenario comparison**: Side-by-side view of different staffing configurations
 
 **Primary users:**
 - Operations managers planning monthly rosters
-- HR evaluating the impact of hiring decisions
+- HR evaluating staffing needs
 - Team leads checking workload balance
 
-## Scenario Simulation
+## Staff Changes
 
-A key feature is the ability to simulate hiring scenarios:
+The app handles staff changes through direct table editing. When you modify the staff (add employees, change hours, update availability) and regenerate:
 
-| Scenario | Description |
-|----------|-------------|
-| A - Current staff | Baseline with existing 5 employees |
-| B - Add part-timer (28h) | What if we hire a part-time employee? |
-| C - Add full-timer (38h) | What if we hire a full-time employee? |
+- The schedule is recalculated from scratch with the new configuration
+- All constraints are re-evaluated for the updated team
+- Coverage gaps and volunteer needs reflect the current staff setup
 
-The app generates all scenarios simultaneously and highlights which one minimizes volunteer dependency. This supports data-driven hiring decisions.
+This approach keeps the workflow simple: edit staff, generate schedule, export results.
 
 ## Algorithm Approach
 

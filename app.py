@@ -1,11 +1,6 @@
 """
 App Streamlit per generazione turnazione 5 settimane.
 Croce Rossa - Pianificazione Turni
-
-Supporta confronto versioni:
-- A: Staff attuale
-- B: Staff + nuovo dipendente (ore scelte)
-- C: Staff + nuovo dipendente (alternativa PT/FT)
 """
 import streamlit as st
 import pandas as pd
@@ -17,7 +12,6 @@ from core.utils import (
     get_default_staff,
     validate_staff,
     validate_coverage,
-    add_employee,
     calc_total_hours_required
 )
 from core.scheduler import genera_turnazione
@@ -34,10 +28,10 @@ st.title("Pianificazione Turni - 5 Settimane")
 st.markdown("Genera la turnazione del personale con vincoli e copertura garantita.")
 
 
-# --- Funzioni helper per visualizzazione ---
-def mostra_versione(nome_versione: str, risultato: dict, vincoli: dict,
-                    data_inizio: date, usa_volontario: bool, notte_attiva: bool):
-    """Mostra una versione completa con calendario, summary e download."""
+# --- Funzione helper per visualizzazione ---
+def mostra_turnazione(risultato: dict, vincoli: dict,
+                      data_inizio: date, usa_volontario: bool, notte_attiva: bool):
+    """Mostra la turnazione completa con calendario, summary e download."""
 
     meta = risultato['meta']
 
@@ -65,7 +59,7 @@ def mostra_versione(nome_versione: str, risultato: dict, vincoli: dict,
         st.error(f"{meta['turni_scoperti']} turni SCOPERTI!")
 
     # Calendario
-    with st.expander("Calendario turni", expanded=False):
+    with st.expander("Calendario turni", expanded=True):
         calendario_df = risultato['calendario']
 
         for week_num in range(1, 6):
@@ -92,7 +86,7 @@ def mostra_versione(nome_versione: str, risultato: dict, vincoli: dict,
                          use_container_width=True, hide_index=True)
 
     # Riepilogo ore
-    with st.expander("Riepilogo ore per persona", expanded=False):
+    with st.expander("Riepilogo ore per persona", expanded=True):
         summary_df = risultato['summary']
 
         def highlight_scost(val):
@@ -131,31 +125,32 @@ def mostra_versione(nome_versione: str, risultato: dict, vincoli: dict,
         plt.close(fig)
 
     # Download
+    st.subheader("Esporta")
     date_str = data_inizio.strftime('%Y%m%d')
-    file_base = f"turnazione_{date_str}_{nome_versione.lower().replace(' ', '_').replace('+', 'plus')}"
+    file_base = f"turnazione_{date_str}"
 
     col_csv, col_excel, col_pdf = st.columns(3)
     with col_csv:
         st.download_button(
-            f"CSV {nome_versione}",
+            "CSV",
             export_csv(risultato['calendario'], notte_attiva),
             f"{file_base}.csv", "text/csv",
-            use_container_width=True, key=f"csv_{nome_versione}"
+            use_container_width=True
         )
     with col_excel:
         st.download_button(
-            f"Excel {nome_versione}",
+            "Excel",
             export_excel(risultato, notte_attiva),
             f"{file_base}.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True, key=f"xlsx_{nome_versione}"
+            use_container_width=True
         )
     with col_pdf:
         st.download_button(
-            f"PDF {nome_versione}",
+            "PDF",
             export_pdf(risultato, data_inizio, vincoli, usa_volontario, notte_attiva),
             f"{file_base}.pdf", "application/pdf",
-            use_container_width=True, key=f"pdf_{nome_versione}"
+            use_container_width=True
         )
 
 
@@ -220,7 +215,8 @@ else:
 col_left, col_right = st.columns([2, 1])
 
 with col_left:
-    st.subheader("Staff attuale")
+    st.subheader("Staff")
+    st.caption("Modifica la tabella per aggiungere, rimuovere o modificare dipendenti.")
     edited_staff = st.data_editor(
         st.session_state.staff,
         num_rows="dynamic",
@@ -252,38 +248,6 @@ with col_right:
 
     st.markdown("**Altri**")
     max_consecutivi = st.number_input("Max giorni consecutivi", 3, 7, 6)
-
-# --- Nuovo dipendente per confronto ---
-st.divider()
-st.subheader("Nuovo dipendente (per confronto versioni)")
-st.caption("Lascia vuoto per generare solo la versione attuale. Compila per confrontare scenari.")
-
-col_nome, col_tipo, col_opz = st.columns([2, 2, 1])
-
-with col_nome:
-    nuovo_nome = st.text_input("Nome nuovo dipendente", placeholder="Es: Mario Rossi", key="nuovo_nome")
-
-with col_tipo:
-    tipo_contratto = st.radio(
-        "Tipo contratto",
-        options=['PT 28h', 'FT 38h', 'Personalizzato'],
-        horizontal=True,
-        key="tipo_contratto"
-    )
-
-with col_opz:
-    if tipo_contratto == 'PT 28h':
-        nuove_ore = 28
-        st.metric("Ore", "28h")
-    elif tipo_contratto == 'FT 38h':
-        nuove_ore = 38
-        st.metric("Ore", "38h")
-    else:
-        nuove_ore = st.number_input("Ore custom", 1, 48, 30, key="ore_custom")
-
-col_n, col_d = st.columns(2)
-nuovo_puo_notte = col_n.checkbox("Può fare notte", value=True, key="nuovo_notte")
-nuovo_puo_dom = col_d.checkbox("Può lavorare domenica", value=True, key="nuovo_dom")
 
 # --- Validazioni ---
 st.divider()
@@ -336,159 +300,18 @@ if (genera_btn or rigenera_btn) and is_valid:
         'min_notte': min_notte
     }
 
-    versioni = {}
-    staff_base = st.session_state.staff.copy()
-
     with st.spinner("Generazione in corso..."):
-
-        # Versione A: Staff attuale
-        versioni['A - Staff attuale'] = genera_turnazione(
-            staff_base, data_inizio, 5, vincoli, usa_volontario,
+        risultato = genera_turnazione(
+            st.session_state.staff, data_inizio, 5, vincoli, usa_volontario,
             randomness=randomness, seed=seed_value
         )
 
-        # Se c'è un nuovo dipendente, genera anche B e C
-        nuovo_nome_clean = nuovo_nome.strip()
-        if nuovo_nome_clean:
+    st.success("Turnazione generata!")
+    st.caption(f"Seed: **{seed_value}** | Randomness: **{randomness}**")
 
-            # Versione B: con ore scelte
-            staff_b, err_b = add_employee(staff_base, nuovo_nome_clean, nuove_ore, nuovo_puo_notte, nuovo_puo_dom)
-            if not err_b:
-                label_b = f"B - +{nuovo_nome_clean} ({nuove_ore}h)"
-                versioni[label_b] = genera_turnazione(
-                    staff_b, data_inizio, 5, vincoli, usa_volontario,
-                    randomness=randomness, seed=seed_value + 1
-                )
-
-            # Versione C: alternativa
-            if tipo_contratto == 'PT 28h':
-                ore_alt = 38
-                label_alt = "FT 38h"
-            elif tipo_contratto == 'FT 38h':
-                ore_alt = 28
-                label_alt = "PT 28h"
-            else:
-                # Custom: genera sia PT che FT
-                ore_alt = 28
-                label_alt = "PT 28h"
-                # Versione C1: PT
-                staff_c1, _ = add_employee(staff_base, nuovo_nome_clean, 28, nuovo_puo_notte, nuovo_puo_dom)
-                versioni[f"C1 - +{nuovo_nome_clean} (PT 28h)"] = genera_turnazione(
-                    staff_c1, data_inizio, 5, vincoli, usa_volontario,
-                    randomness=randomness, seed=seed_value + 2
-                )
-                # Versione C2: FT
-                staff_c2, _ = add_employee(staff_base, nuovo_nome_clean, 38, nuovo_puo_notte, nuovo_puo_dom)
-                versioni[f"C2 - +{nuovo_nome_clean} (FT 38h)"] = genera_turnazione(
-                    staff_c2, data_inizio, 5, vincoli, usa_volontario,
-                    randomness=randomness, seed=seed_value + 3
-                )
-                ore_alt = None  # Skip versione C singola
-
-            if ore_alt and tipo_contratto != 'Personalizzato':
-                staff_c, err_c = add_employee(staff_base, nuovo_nome_clean, ore_alt, nuovo_puo_notte, nuovo_puo_dom)
-                if not err_c:
-                    label_c = f"C - +{nuovo_nome_clean} ({label_alt})"
-                    versioni[label_c] = genera_turnazione(
-                        staff_c, data_inizio, 5, vincoli, usa_volontario,
-                        randomness=randomness, seed=seed_value + 4
-                    )
-
-    st.success(f"Generate {len(versioni)} versioni!")
-    st.caption(f"Seed usato: **{seed_value}** | Randomness: **{randomness}**")
-
-    # --- Tabella comparativa ---
-    st.subheader("Confronto versioni")
-
-    compare_data = []
-    for nome_v, ris in versioni.items():
-        m = ris['meta']
-        s = ris['summary']
-        row = {
-            'Versione': nome_v,
-            'Volontario (turni)': m['turni_volontario'],
-            'Ore volontario': m['turni_volontario'] * 7,
-            'Scoperture': m['turni_scoperti'],
-            'Copertura %': m['copertura_interna_pct'],
-            'Scost. ore max-min': m['scostamento_ore'],
-            'Domeniche (distribuzione)': '/'.join(str(x) for x in s['Domeniche'].tolist()),
-        }
-        if notte_attiva and 'Notti' in s.columns:
-            row['Notti (distribuzione)'] = '/'.join(str(x) for x in s['Notti'].tolist())
-        compare_data.append(row)
-
-    compare_df = pd.DataFrame(compare_data)
-
-    # Evidenzia la migliore (meno volontario)
-    def highlight_best(row):
-        styles = [''] * len(row)
-        if row['Volontario (turni)'] == compare_df['Volontario (turni)'].min():
-            styles[0] = 'background-color: #d4edda'
-        return styles
-
-    st.dataframe(
-        compare_df.style.apply(highlight_best, axis=1),
-        use_container_width=True,
-        hide_index=True
-    )
-
-    # --- Testo "Cosa cambia" ---
-    if len(versioni) > 1:
-        st.subheader("Cosa cambia?")
-
-        meta_a = versioni['A - Staff attuale']['meta']
-        vol_a = meta_a['turni_volontario']
-
-        for nome_v, ris in versioni.items():
-            if nome_v == 'A - Staff attuale':
-                continue
-
-            m = ris['meta']
-            vol_diff = vol_a - m['turni_volontario']
-            ore_diff = vol_diff * 7
-
-            if vol_diff > 0:
-                st.markdown(
-                    f"**{nome_v}**: riduce il ricorso a Volontario esperto di **{vol_diff} turni** "
-                    f"({ore_diff}h), portando la copertura interna al **{m['copertura_interna_pct']}%**."
-                )
-            elif vol_diff < 0:
-                st.markdown(
-                    f"**{nome_v}**: aumenta il ricorso a Volontario esperto di **{abs(vol_diff)} turni**. "
-                    f"Potrebbe indicare un problema di distribuzione."
-                )
-            else:
-                st.markdown(
-                    f"**{nome_v}**: stesso numero di turni Volontario ({m['turni_volontario']}), "
-                    f"ma migliore distribuzione del carico (scostamento: {m['scostamento_ore']}h)."
-                )
-
-        # Raccomandazione
-        st.divider()
-        best_version = min(versioni.items(), key=lambda x: (x[1]['meta']['turni_volontario'], x[1]['meta']['scostamento_ore']))
-        best_name = best_version[0]
-        best_meta = best_version[1]['meta']
-
-        if best_meta['turni_volontario'] == 0:
-            st.success(
-                f"**Raccomandazione**: {best_name} garantisce copertura completa al 100% "
-                f"senza ricorso a volontari esterni."
-            )
-        else:
-            st.info(
-                f"**Raccomandazione**: {best_name} minimizza il ricorso a volontari "
-                f"({best_meta['turni_volontario']} turni). Valuta l'aggiunta di personale per eliminare le carenze."
-            )
-
-    # --- Mostra ogni versione ---
-    st.divider()
-    st.subheader("Dettaglio versioni")
-
-    tabs = st.tabs(list(versioni.keys()))
-    for tab, (nome_v, ris) in zip(tabs, versioni.items()):
-        with tab:
-            mostra_versione(nome_v, ris, vincoli, data_inizio, usa_volontario, notte_attiva)
+    # Mostra risultato
+    mostra_turnazione(risultato, vincoli, data_inizio, usa_volontario, notte_attiva)
 
 # --- Footer ---
 st.divider()
-st.caption("Croce Rossa - Sistema Pianificazione Turni | v1.0")
+st.caption("Croce Rossa - Sistema Pianificazione Turni | v1.1")

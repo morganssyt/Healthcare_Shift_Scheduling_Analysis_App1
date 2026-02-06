@@ -1,13 +1,12 @@
 # Healthcare Shift Scheduling App
 
-A Python designed web app for generating 5-week staff rosters with constraint handling, scenario comparison, and multiple export formats.
+A Python designed web app for generating 5-week staff rosters with constraint handling and multiple export formats.
 Started from my Data Analysis with the Red Cross.
 
 ## What it does
 
 - **Generates shift schedules** respecting constraints: weekly hours, max consecutive days, rest after night shifts, Sunday availability
 - **Balances workload** automatically across employees (morning/afternoon/night/weekend distribution)
-- **Compares scenarios**: current staff vs. hiring a new employee (part-time 28h or full-time 38h)
 - **Fills gaps** with "Expert Volunteer" when internal coverage isn't enough
 - **Exports** to CSV, Excel, and print-ready PDF
 - **Visualizes** hours distribution with a simple bar chart
@@ -16,7 +15,7 @@ Started from my Data Analysis with the Red Cross.
 
 This tool addresses a common challenge in healthcare and emergency services: building fair, constraint-compliant rosters when staff is limited. It's particularly useful for small teams where manual scheduling becomes error-prone and time-consuming.
 
-The app lets managers quickly test "what-if" scenarios (e.g., "What if we hire a part-timer?") and see the impact on coverage and volunteer dependency.
+Staff changes are handled directly in the editable table. When you add, remove, or modify employees and regenerate, the app produces an updated schedule reflecting the new configuration.
 
 ## Run locally
 
@@ -46,13 +45,12 @@ That's it. Streamlit auto-detects `requirements.txt`.
 - Use fixed seed for reproducible results
 
 **Main panel:**
-- Edit staff table (name, weekly hours, night/Sunday availability)
+- Edit staff table directly (add rows, change names, hours, availability flags)
 - Set coverage constraints (min staff per shift)
-- Optionally add a new employee for scenario comparison
-- Click **Generate** or **Regenerate** for a different variant
+- Click **Generate** to create the schedule
+- Click **Regenerate** for a different variant with the same staff
 
 **Outputs:**
-- Comparison table across scenarios
 - Weekly calendar view with highlighted gaps
 - Hours summary per person with bar chart
 - Download buttons: CSV, Excel, PDF
