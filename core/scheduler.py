@@ -1,25 +1,27 @@
 """
-Scheduler per generazione turni con rotazione settimanale bilanciata.
-Supporta randomizzazione controllata per variazione nei turni.
+Scheduler per generazione turni con vincolo HARD sulle ore settimanali.
+Ogni dipendente deve fare esattamente le ore previste dal contratto.
 """
 import pandas as pd
 import random
 import math
 from datetime import date, timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass, field
+from copy import deepcopy
 
 HOURS_PER_SHIFT = 7
 DAYS_IT = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica']
 VOLUNTEER = "Volontario esperto"
 UNCOVERED = "SCOPERTO"
+MAX_RETRY_ATTEMPTS = 50
 
 
 @dataclass
 class PersonState:
     """Stato di una persona durante lo scheduling."""
     name: str
-    weekly_hours: int
+    weekly_budget: int  # Budget ore settimanale (38 o 28)
     can_night: bool
     can_sunday: bool
     # Contatori totali
@@ -38,8 +40,17 @@ class PersonState:
     def hours_this_week(self, week_idx: int) -> int:
         return self.hours_per_week.get(week_idx, 0)
 
-    def can_work_more_this_week(self, week_idx: int) -> bool:
-        return self.hours_this_week(week_idx) + HOURS_PER_SHIFT <= self.weekly_hours
+    def remaining_hours_this_week(self, week_idx: int) -> int:
+        """Ore ancora da assegnare questa settimana per raggiungere il budget."""
+        return self.weekly_budget - self.hours_this_week(week_idx)
+
+    def can_take_shift_this_week(self, week_idx: int) -> bool:
+        """Verifica se ha ancora budget per un turno questa settimana."""
+        return self.hours_this_week(week_idx) + HOURS_PER_SHIFT <= self.weekly_budget
+
+    def week_budget_satisfied(self, week_idx: int) -> bool:
+        """Verifica se ha raggiunto esattamente il budget settimanale."""
+        return self.hours_this_week(week_idx) == self.weekly_budget
 
     def add_shift(self, week_idx: int, shift_type: str, work_date: date, is_sunday: bool):
         """Registra un turno assegnato."""
@@ -65,10 +76,6 @@ class PersonState:
         self.last_work_date = work_date
         self.worked_night_yesterday = (shift_type == 'night')
 
-    def reset_night_flag(self):
-        """Reset flag notte per nuovo giorno."""
-        pass  # Il flag viene gestito in add_shift
-
 
 @dataclass
 class Slot:
@@ -93,11 +100,7 @@ class Slot:
         return self.remaining == 0
 
 
-def create_weekly_slots(
-    start_date: date,
-    week_idx: int,
-    vincoli: dict
-) -> List[Slot]:
+def create_weekly_slots(start_date: date, week_idx: int, vincoli: dict) -> List[Slot]:
     """Crea tutti gli slot per una settimana."""
     slots = []
     notte_attiva = vincoli.get('notte_attiva', False)
@@ -110,7 +113,7 @@ def create_weekly_slots(
         is_sunday = day_offset == 6
 
         if is_sunday:
-            # Domenica: solo mattino (se richiesto)
+            # Domenica: configurabile
             if vincoli['min_dom_mattino'] > 0:
                 slots.append(Slot(
                     date=current_date,
@@ -157,67 +160,20 @@ def create_weekly_slots(
     return slots
 
 
-def calc_candidate_score(
-    person: PersonState,
-    slot: Slot,
-    all_people: List[PersonState],
-    vincoli: dict
-) -> float:
-    """
-    Calcola score per un candidato. Score più basso = migliore candidato.
-    """
-    score = 0.0
-
-    # 1. Meno ore totali assegnate (peso alto)
-    avg_hours = sum(p.total_hours for p in all_people) / len(all_people) if all_people else 0
-    score += (person.total_hours - avg_hours) * 10
-
-    # 2. Meno ore questa settimana (peso medio-alto)
-    avg_week_hours = sum(p.hours_this_week(slot.week_idx) for p in all_people) / len(all_people) if all_people else 0
-    score += (person.hours_this_week(slot.week_idx) - avg_week_hours) * 8
-
-    # 3. Bilanciamento tipo turno
-    if slot.shift_type == 'morning':
-        avg_morning = sum(p.morning_count for p in all_people) / len(all_people) if all_people else 0
-        score += (person.morning_count - avg_morning) * 5
-    elif slot.shift_type == 'afternoon':
-        avg_afternoon = sum(p.afternoon_count for p in all_people) / len(all_people) if all_people else 0
-        score += (person.afternoon_count - avg_afternoon) * 5
-    elif slot.shift_type == 'night':
-        avg_night = sum(p.night_count for p in all_people) / len(all_people) if all_people else 0
-        score += (person.night_count - avg_night) * 5
-
-    # 4. Bilanciamento domeniche
-    if slot.is_sunday:
-        avg_sunday = sum(p.sunday_count for p in all_people) / len(all_people) if all_people else 0
-        score += (person.sunday_count - avg_sunday) * 6
-
-    # 5. Penalità se vicino al limite consecutivi
-    max_cons = vincoli.get('max_consecutivi', 6)
-    if person.consecutive_days >= max_cons - 1:
-        score += 50  # Forte penalità
-
-    # 6. Penalità se ha lavorato ieri (per alternanza)
-    if person.last_work_date and (slot.date - person.last_work_date).days == 1:
-        score += 3  # Leggera penalità per favorire alternanza
-
-    return score
-
-
 def is_candidate_eligible(
     person: PersonState,
     slot: Slot,
     vincoli: dict,
-    day_assignments: Dict[str, str]  # nome -> turno già assegnato oggi
+    day_assignments: Dict[str, str]
 ) -> bool:
-    """Verifica se una persona può essere assegnata a questo slot."""
+    """Verifica se una persona può essere assegnata a questo slot (vincoli HARD)."""
 
     # Già assegnato a un turno oggi
     if person.name in day_assignments:
         return False
 
-    # Non può superare ore settimanali
-    if not person.can_work_more_this_week(slot.week_idx):
+    # VINCOLO HARD: non può superare budget ore settimanali
+    if not person.can_take_shift_this_week(slot.week_idx):
         return False
 
     # Max giorni consecutivi raggiunto
@@ -243,43 +199,68 @@ def is_candidate_eligible(
     return True
 
 
+def calc_candidate_score(
+    person: PersonState,
+    slot: Slot,
+    all_people: List[PersonState],
+    vincoli: dict
+) -> float:
+    """
+    Calcola score per un candidato. Score più basso = migliore candidato.
+    Priorità: chi ha più ore rimanenti da fare questa settimana.
+    """
+    score = 0.0
+
+    # 1. PRIORITA' MASSIMA: ore rimanenti questa settimana (chi deve fare più ore ha priorità)
+    remaining = person.remaining_hours_this_week(slot.week_idx)
+    score -= remaining * 20  # Più ore da fare = score più basso = priorità più alta
+
+    # 2. Bilanciamento tipo turno
+    if slot.shift_type == 'morning':
+        avg_morning = sum(p.morning_count for p in all_people) / len(all_people) if all_people else 0
+        score += (person.morning_count - avg_morning) * 3
+    elif slot.shift_type == 'afternoon':
+        avg_afternoon = sum(p.afternoon_count for p in all_people) / len(all_people) if all_people else 0
+        score += (person.afternoon_count - avg_afternoon) * 3
+
+    # 3. Bilanciamento domeniche
+    if slot.is_sunday:
+        avg_sunday = sum(p.sunday_count for p in all_people) / len(all_people) if all_people else 0
+        score += (person.sunday_count - avg_sunday) * 4
+
+    # 4. Penalità se vicino al limite consecutivi
+    max_cons = vincoli.get('max_consecutivi', 6)
+    if person.consecutive_days >= max_cons - 1:
+        score += 30
+
+    return score
+
+
 def weighted_random_choice(candidates_scored: List[tuple], randomness: float, top_k: int = 3) -> 'PersonState':
-    """
-    Seleziona un candidato usando weighted random tra i top-K.
-    randomness=0 -> sempre il migliore (deterministico)
-    randomness=1 -> selezione molto casuale tra i top-K
-    """
+    """Seleziona un candidato usando weighted random tra i top-K."""
     if len(candidates_scored) == 1 or randomness == 0:
         return candidates_scored[0][0]
 
-    # Prendi i top-K candidati
     k = min(top_k, len(candidates_scored))
     top_candidates = candidates_scored[:k]
 
-    # Converti score in pesi (score basso = peso alto)
-    # Usa softmax-like con temperatura controllata da randomness
     scores = [c[1] for c in top_candidates]
     min_score = min(scores)
     max_score = max(scores)
 
-    # Normalizza e inverti (score basso -> peso alto)
     if max_score == min_score:
         weights = [1.0] * k
     else:
-        # Temperatura: randomness basso = preferenza forte per il migliore
         temperature = 0.1 + randomness * 2.0
         weights = []
         for score in scores:
-            # Inverti: migliore (score basso) -> peso alto
             normalized = (max_score - score) / (max_score - min_score + 0.001)
             weight = math.exp(normalized / temperature)
             weights.append(weight)
 
-    # Normalizza pesi
     total = sum(weights)
     weights = [w / total for w in weights]
 
-    # Selezione pesata
     r = random.random()
     cumulative = 0
     for i, w in enumerate(weights):
@@ -290,6 +271,13 @@ def weighted_random_choice(candidates_scored: List[tuple], randomness: float, to
     return top_candidates[-1][0]
 
 
+def update_night_flags(people: List[PersonState], current_date: date):
+    """Aggiorna flag worked_night_yesterday per il nuovo giorno."""
+    for p in people:
+        if p.last_work_date and (current_date - p.last_work_date).days > 1:
+            p.worked_night_yesterday = False
+
+
 def assign_slot(
     slot: Slot,
     people: List[PersonState],
@@ -298,15 +286,11 @@ def assign_slot(
     usa_volontario: bool,
     randomness: float = 0.0
 ) -> List[str]:
-    """
-    Assegna persone a uno slot. Ritorna lista nomi assegnati.
-    randomness controlla la variazione (0=deterministico, 1=molto casuale).
-    """
+    """Assegna persone a uno slot. Usa Volontario esperto se nessuno disponibile."""
     assigned = []
-    top_k = max(3, len(people) // 2)  # Adatta K alla dimensione staff
+    top_k = max(3, len(people) // 2)
 
     while slot.remaining > 0:
-        # Trova candidati eleggibili
         candidates = [
             p for p in people
             if is_candidate_eligible(p, slot, vincoli, day_assignments)
@@ -314,7 +298,7 @@ def assign_slot(
         ]
 
         if not candidates:
-            # Nessun candidato disponibile
+            # Nessun candidato: usa volontario o segna scoperto
             if usa_volontario:
                 slot.assigned.append(VOLUNTEER)
                 assigned.append(VOLUNTEER)
@@ -330,7 +314,7 @@ def assign_slot(
         ]
         candidates_scored.sort(key=lambda x: x[1])
 
-        # Selezione con randomness
+        # Selezione
         best = weighted_random_choice(candidates_scored, randomness, top_k)
 
         # Assegna
@@ -342,58 +326,63 @@ def assign_slot(
     return assigned
 
 
-def update_night_flags(people: List[PersonState], current_date: date):
-    """Aggiorna flag worked_night_yesterday per il nuovo giorno."""
+def check_week_budgets(people: List[PersonState], week_idx: int) -> Tuple[bool, List[str]]:
+    """
+    Verifica che tutti abbiano raggiunto esattamente il budget settimanale.
+    Ritorna (success, lista_problemi).
+    """
+    problems = []
+    all_ok = True
+
     for p in people:
-        if p.last_work_date and (current_date - p.last_work_date).days > 1:
-            p.worked_night_yesterday = False
+        actual = p.hours_this_week(week_idx)
+        expected = p.weekly_budget
+        if actual != expected:
+            all_ok = False
+            diff = actual - expected
+            problems.append(f"{p.name}: {actual}h vs {expected}h budget (diff: {diff:+}h)")
+
+    return all_ok, problems
 
 
-def genera_turnazione(
+def schedule_single_attempt(
     staff: pd.DataFrame,
     data_inizio: date,
     num_weeks: int,
     vincoli: dict,
-    usa_volontario: bool = True,
-    randomness: float = 0.0,
-    seed: Optional[int] = None
-) -> dict:
+    usa_volontario: bool,
+    randomness: float,
+    seed: int
+) -> Tuple[dict, bool, List[str]]:
     """
-    Genera la turnazione per il periodo richiesto.
-
-    Args:
-        randomness: 0.0 = deterministico, 1.0 = massima variazione
-        seed: se fornito, rende la generazione riproducibile
+    Singolo tentativo di scheduling.
+    Ritorna (risultato, success, problemi).
     """
-    # Imposta seed per riproducibilità
-    if seed is not None:
-        random.seed(seed)
+    random.seed(seed)
 
     # Inizializza stato persone
     people = []
     for _, row in staff.iterrows():
         people.append(PersonState(
             name=row['Nome'],
-            weekly_hours=int(row['Ore settimanali']),
+            weekly_budget=int(row['Ore settimanali']),
             can_night=bool(row['Può fare notte']),
             can_sunday=bool(row['Può lavorare domenica'])
         ))
 
-    # Genera slot per tutte le settimane
     all_slots = []
+    all_problems = []
+    week_success = True
+
+    # Schedula settimana per settimana
     for week_idx in range(num_weeks):
         week_start = data_inizio + timedelta(weeks=week_idx)
-        slots = create_weekly_slots(week_start, week_idx, vincoli)
-        all_slots.extend(slots)
-
-    # Assegna turni settimana per settimana
-    for week_idx in range(num_weeks):
-        week_slots = [s for s in all_slots if s.week_idx == week_idx]
+        week_slots = create_weekly_slots(week_start, week_idx, vincoli)
 
         # Raggruppa per giorno
         days_in_week = sorted(set(s.date for s in week_slots))
 
-        # Shuffle giorni (eccetto domenica che resta ultima) se randomness > 0
+        # Shuffle giorni se randomness > 0
         if randomness > 0.3 and len(days_in_week) > 1:
             non_sunday = [d for d in days_in_week if d.weekday() != 6]
             sunday = [d for d in days_in_week if d.weekday() == 6]
@@ -402,32 +391,42 @@ def genera_turnazione(
             days_in_week = non_sunday + sunday
 
         for current_date in days_in_week:
-            # Aggiorna flag notte
             update_night_flags(people, current_date)
 
-            # Slot di questo giorno
             day_slots = [s for s in week_slots if s.date == current_date]
             day_assignments: Dict[str, str] = {}
 
-            # Ordine base: notte prima (così il riposo funziona), poi mattino, poi pomeriggio
+            # Ordine: notte prima, poi mattino, poi pomeriggio
             day_slots.sort(key=lambda s: {'night': 0, 'morning': 1, 'afternoon': 2}[s.shift_type])
-
-            # Leggero shuffle mattino/pomeriggio se randomness alto
-            if randomness > 0.6 and len(day_slots) >= 2:
-                non_night = [s for s in day_slots if s.shift_type != 'night']
-                night = [s for s in day_slots if s.shift_type == 'night']
-                if random.random() < randomness * 0.5:
-                    random.shuffle(non_night)
-                day_slots = night + non_night
 
             for slot in day_slots:
                 assign_slot(slot, people, vincoli, day_assignments, usa_volontario, randomness)
 
-    # Costruisci output DataFrame calendario
-    calendario_rows = []
+        all_slots.extend(week_slots)
+
+        # Verifica budget settimanale
+        ok, problems = check_week_budgets(people, week_idx)
+        if not ok:
+            week_success = False
+            all_problems.extend([f"Sett {week_idx+1}: {p}" for p in problems])
+
+    # Costruisci output
+    result = build_output(all_slots, people, data_inizio, num_weeks, vincoli)
+    return result, week_success, all_problems
+
+
+def build_output(
+    all_slots: List[Slot],
+    people: List[PersonState],
+    data_inizio: date,
+    num_weeks: int,
+    vincoli: dict
+) -> dict:
+    """Costruisce il dizionario di output con calendario, summary e meta."""
     notte_attiva = vincoli.get('notte_attiva', False)
 
-    # Raggruppa slot per data
+    # Calendario DataFrame
+    calendario_rows = []
     slots_by_date = {}
     for s in all_slots:
         if s.date not in slots_by_date:
@@ -452,15 +451,16 @@ def genera_turnazione(
 
     calendario_df = pd.DataFrame(calendario_rows)
 
-    # Costruisci summary per persona
+    # Summary per persona con breakdown settimanale
     summary_rows = []
     for p in people:
         row = {
             'Nome': p.name,
             'Ore totali': p.total_hours,
-            'Target (5 sett)': p.weekly_hours * num_weeks,
-            'Scostamento': p.total_hours - (p.weekly_hours * num_weeks),
+            'Budget (5 sett)': p.weekly_budget * num_weeks,
+            'Scostamento': p.total_hours - (p.weekly_budget * num_weeks),
         }
+        # Breakdown per settimana
         for w in range(num_weeks):
             row[f'Sett {w+1}'] = p.hours_this_week(w)
         row['Mattini'] = p.morning_count
@@ -478,9 +478,9 @@ def genera_turnazione(
     uncovered_slots = sum(1 for s in all_slots for a in s.assigned if a == UNCOVERED)
     covered_internal = total_slots - volunteer_slots - uncovered_slots
 
-    # Scostamento ore
-    hours_list = [p.total_hours for p in people]
-    scostamento = max(hours_list) - min(hours_list) if hours_list else 0
+    # Scostamento ore (deve essere 0 con vincolo HARD)
+    deviations = [abs(p.total_hours - p.weekly_budget * num_weeks) for p in people]
+    max_deviation = max(deviations) if deviations else 0
 
     meta = {
         'turni_totali': total_slots,
@@ -488,7 +488,8 @@ def genera_turnazione(
         'turni_volontario': volunteer_slots,
         'turni_scoperti': uncovered_slots,
         'copertura_interna_pct': round(covered_internal / total_slots * 100, 1) if total_slots > 0 else 0,
-        'scostamento_ore': scostamento
+        'scostamento_ore': max_deviation,
+        'budget_rispettato': max_deviation == 0
     }
 
     return {
@@ -496,3 +497,53 @@ def genera_turnazione(
         'summary': summary_df,
         'meta': meta
     }
+
+
+def genera_turnazione(
+    staff: pd.DataFrame,
+    data_inizio: date,
+    num_weeks: int,
+    vincoli: dict,
+    usa_volontario: bool = True,
+    randomness: float = 0.0,
+    seed: Optional[int] = None
+) -> dict:
+    """
+    Genera la turnazione rispettando il vincolo HARD sulle ore settimanali.
+    Riprova con seed diversi se necessario.
+    """
+    if seed is None:
+        seed = random.randint(0, 99999)
+
+    best_result = None
+    best_volunteer_count = float('inf')
+
+    for attempt in range(MAX_RETRY_ATTEMPTS):
+        current_seed = seed + attempt
+        result, success, problems = schedule_single_attempt(
+            staff, data_inizio, num_weeks, vincoli, usa_volontario, randomness, current_seed
+        )
+
+        volunteer_count = result['meta']['turni_volontario']
+
+        # Se budget rispettato per tutti, verifica se è il miglior risultato
+        if result['meta']['budget_rispettato']:
+            if volunteer_count < best_volunteer_count:
+                best_volunteer_count = volunteer_count
+                best_result = result
+                best_result['meta']['seed_used'] = current_seed
+                best_result['meta']['attempts'] = attempt + 1
+
+            # Se abbiamo 0 volontari, abbiamo la soluzione ottima
+            if volunteer_count == 0:
+                break
+
+        # Se dopo tutti i tentativi non abbiamo una soluzione valida, prendi l'ultima
+        if attempt == MAX_RETRY_ATTEMPTS - 1 and best_result is None:
+            best_result = result
+            best_result['meta']['seed_used'] = current_seed
+            best_result['meta']['attempts'] = MAX_RETRY_ATTEMPTS
+            best_result['meta']['constraint_failure'] = True
+            best_result['meta']['problems'] = problems
+
+    return best_result

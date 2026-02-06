@@ -1,6 +1,7 @@
 """
 App Streamlit per generazione turnazione 5 settimane.
 Croce Rossa - Pianificazione Turni
+Vincolo HARD: ogni dipendente deve fare esattamente le ore settimanali previste.
 """
 import streamlit as st
 import pandas as pd
@@ -35,6 +36,14 @@ def mostra_turnazione(risultato: dict, vincoli: dict,
 
     meta = risultato['meta']
 
+    # Verifica se ci sono problemi con i vincoli
+    if meta.get('constraint_failure'):
+        st.error("Impossibile soddisfare i vincoli senza volontari aggiuntivi.")
+        if 'problems' in meta:
+            with st.expander("Dettaglio problemi"):
+                for p in meta['problems']:
+                    st.write(f"- {p}")
+
     # Metriche
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -47,16 +56,21 @@ def mostra_turnazione(risultato: dict, vincoli: dict,
                   delta=f"{vol} turni" if vol > 0 else None,
                   delta_color="inverse" if vol > 0 else "off")
     with col4:
-        unc = meta['turni_scoperti']
-        st.metric("Scoperture", unc,
-                  delta=f"{unc} turni" if unc > 0 else None,
-                  delta_color="inverse" if unc > 0 else "off")
+        budget_ok = meta.get('budget_rispettato', False)
+        st.metric("Budget rispettato",
+                  "Si" if budget_ok else "No",
+                  delta="OK" if budget_ok else "Attenzione",
+                  delta_color="off" if budget_ok else "inverse")
 
     # Avvisi
     if meta['turni_volontario'] > 0:
-        st.warning(f"Volontario richiesto per {meta['turni_volontario']} turni.")
+        st.warning(f"Volontario richiesto per {meta['turni_volontario']} turni per rispettare i budget ore.")
     if meta['turni_scoperti'] > 0:
         st.error(f"{meta['turni_scoperti']} turni SCOPERTI!")
+
+    # Info tentativi
+    if 'attempts' in meta:
+        st.caption(f"Soluzione trovata in {meta['attempts']} tentativi (seed: {meta.get('seed_used', 'N/A')})")
 
     # Calendario
     with st.expander("Calendario turni", expanded=True):
@@ -85,44 +99,70 @@ def mostra_turnazione(risultato: dict, vincoli: dict,
             st.dataframe(display_df.style.applymap(highlight_issues),
                          use_container_width=True, hide_index=True)
 
-    # Riepilogo ore
+    # Riepilogo ore con breakdown settimanale
     with st.expander("Riepilogo ore per persona", expanded=True):
         summary_df = risultato['summary']
 
-        def highlight_scost(val):
+        # Evidenzia scostamenti (dovrebbero essere tutti 0)
+        def highlight_deviation(val):
             if isinstance(val, (int, float)):
-                if val < 0:
-                    return 'color: #dc3545'
-                elif val > 0:
-                    return 'color: #28a745'
+                if val != 0:
+                    return 'color: #dc3545; font-weight: bold'
             return ''
 
-        st.dataframe(summary_df.style.applymap(highlight_scost, subset=['Scostamento']),
+        st.dataframe(summary_df.style.applymap(highlight_deviation, subset=['Scostamento']),
                      use_container_width=True, hide_index=True)
-        st.caption(f"Scostamento max-min: **{meta['scostamento_ore']}h**")
+
+        # Verifica che tutti gli scostamenti siano 0
+        all_zero = (summary_df['Scostamento'] == 0).all()
+        if all_zero:
+            st.success("Tutti i dipendenti rispettano esattamente il budget ore settimanale.")
+        else:
+            st.warning("Alcuni dipendenti non hanno raggiunto il budget ore (turni coperti da Volontario).")
 
         # Grafico ore per persona
-        fig, ax = plt.subplots(figsize=(8, 4))
+        fig, ax = plt.subplots(figsize=(10, 5))
         names = summary_df['Nome'].tolist()
         hours = summary_df['Ore totali'].tolist()
-        targets = summary_df['Target (5 sett)'].tolist()
+        budgets = summary_df['Budget (5 sett)'].tolist()
 
         x = range(len(names))
         width = 0.35
 
-        bars1 = ax.bar([i - width/2 for i in x], hours, width, label='Ore assegnate')
-        bars2 = ax.bar([i + width/2 for i in x], targets, width, label='Target', alpha=0.6)
+        bars1 = ax.bar([i - width/2 for i in x], hours, width, label='Ore assegnate', color='#2E86AB')
+        bars2 = ax.bar([i + width/2 for i in x], budgets, width, label='Budget', color='#A23B72', alpha=0.7)
 
         ax.set_ylabel('Ore')
-        ax.set_title('Ore assegnate vs Target (5 settimane)')
+        ax.set_title('Ore assegnate vs Budget (5 settimane)')
         ax.set_xticks(list(x))
         ax.set_xticklabels([n.split()[0] for n in names], rotation=45, ha='right')
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
 
+        # Aggiungi valori sopra le barre
+        for bar, val in zip(bars1, hours):
+            ax.annotate(f'{val}', xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
+                       ha='center', va='bottom', fontsize=9)
+
         plt.tight_layout()
         st.pyplot(fig)
         plt.close(fig)
+
+        # Tabella breakdown settimanale
+        st.markdown("**Breakdown ore per settimana:**")
+        week_cols = [c for c in summary_df.columns if c.startswith('Sett ')]
+        if week_cols:
+            breakdown_df = summary_df[['Nome'] + week_cols].copy()
+
+            # Aggiungi colonna budget settimanale per riferimento
+            budgets_weekly = []
+            for _, row in summary_df.iterrows():
+                budget_5w = row['Budget (5 sett)']
+                weekly_budget = budget_5w // 5
+                budgets_weekly.append(weekly_budget)
+            breakdown_df['Budget/sett'] = budgets_weekly
+
+            st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
 
     # Download
     st.subheader("Esporta")
@@ -216,14 +256,14 @@ col_left, col_right = st.columns([2, 1])
 
 with col_left:
     st.subheader("Staff")
-    st.caption("Modifica la tabella per aggiungere, rimuovere o modificare dipendenti.")
+    st.caption("Modifica la tabella per aggiungere, rimuovere o modificare dipendenti. Budget: 38h FT, 28h PT.")
     edited_staff = st.data_editor(
         st.session_state.staff,
         num_rows="dynamic",
         use_container_width=True,
         column_config={
             'Nome': st.column_config.TextColumn('Nome', required=True),
-            'Ore settimanali': st.column_config.NumberColumn('Ore/sett', min_value=1, max_value=48, step=1),
+            'Ore settimanali': st.column_config.NumberColumn('Budget ore/sett', min_value=1, max_value=48, step=1),
             'Può fare notte': st.column_config.CheckboxColumn('Notte', default=False),
             'Può lavorare domenica': st.column_config.CheckboxColumn('Domenica', default=True)
         },
@@ -232,7 +272,7 @@ with col_left:
     )
     st.session_state.staff = edited_staff
     total_hours = edited_staff['Ore settimanali'].sum()
-    st.caption(f"**{len(edited_staff)} dipendenti** - **{total_hours}h/settimana**")
+    st.caption(f"**{len(edited_staff)} dipendenti** - **{total_hours}h/settimana budget totale**")
 
 with col_right:
     st.subheader("Vincoli copertura")
@@ -269,9 +309,12 @@ with st.expander("Riepilogo fabbisogno ore", expanded=True):
     c1.metric("Turni totali", fabbisogno['turni_totali'])
     c2.metric("Ore richieste", f"{fabbisogno['ore_totali_richieste']}h")
     ore_disp = total_hours * 5
-    c3.metric("Ore disponibili", f"{ore_disp}h")
+    c3.metric("Budget disponibile", f"{ore_disp}h")
     delta = ore_disp - fabbisogno['ore_totali_richieste']
     c4.metric("Bilancio", f"{delta:+}h", delta_color="normal" if delta >= 0 else "inverse")
+
+    if delta < 0:
+        st.warning(f"Budget insufficiente: servono {abs(delta)}h in più. Alcuni turni richiederanno Volontario esperto.")
 
 # --- Genera turnazione ---
 st.divider()
@@ -300,18 +343,22 @@ if (genera_btn or rigenera_btn) and is_valid:
         'min_notte': min_notte
     }
 
-    with st.spinner("Generazione in corso..."):
+    with st.spinner("Generazione in corso (ricerca soluzione ottimale)..."):
         risultato = genera_turnazione(
             st.session_state.staff, data_inizio, 5, vincoli, usa_volontario,
             randomness=randomness, seed=seed_value
         )
 
-    st.success("Turnazione generata!")
-    st.caption(f"Seed: **{seed_value}** | Randomness: **{randomness}**")
+    if risultato['meta'].get('budget_rispettato', False):
+        st.success("Turnazione generata! Budget ore rispettato per tutti.")
+    else:
+        st.warning("Turnazione generata con alcuni turni assegnati a Volontario esperto.")
+
+    st.caption(f"Seed iniziale: **{seed_value}** | Randomness: **{randomness}**")
 
     # Mostra risultato
     mostra_turnazione(risultato, vincoli, data_inizio, usa_volontario, notte_attiva)
 
 # --- Footer ---
 st.divider()
-st.caption("Croce Rossa - Sistema Pianificazione Turni | v1.1")
+st.caption("Croce Rossa - Sistema Pianificazione Turni | v2.0")
