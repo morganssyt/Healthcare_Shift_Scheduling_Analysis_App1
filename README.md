@@ -1,12 +1,12 @@
-# Healthcare Shift Scheduling App
+# Healthcare Shift Scheduling App & Analysis
 
-A Python designed web app for generating 5-week staff rosters with constraint handling and multiple export formats.
-Started from my Data Analysis with the Red Cross.
+A Streamlit web app for generating 5-week staff rosters with constraint handling, scenario comparison, and multiple export formats. Includes comprehensive workforce planning analysis with KPIs, risk assessment, and operational recommendations.
 
 ## What it does
 
 - **Generates shift schedules** respecting constraints: weekly hours, max consecutive days, rest after night shifts, Sunday availability
 - **Balances workload** automatically across employees (morning/afternoon/night/weekend distribution)
+- **Compares scenarios**: current staff vs. hiring a new employee (part-time 28h or full-time 38h)
 - **Fills gaps** with "Expert Volunteer" when internal coverage isn't enough
 - **Exports** to CSV, Excel, and print-ready PDF
 - **Visualizes** hours distribution with a simple bar chart
@@ -15,7 +15,7 @@ Started from my Data Analysis with the Red Cross.
 
 This tool addresses a common challenge in healthcare and emergency services: building fair, constraint-compliant rosters when staff is limited. It's particularly useful for small teams where manual scheduling becomes error-prone and time-consuming.
 
-Staff changes are handled directly in the editable table. When you add, remove, or modify employees and regenerate, the app produces an updated schedule reflecting the new configuration.
+The app lets managers quickly test "what-if" scenarios (e.g., "What if we hire a part-timer?") and see the impact on coverage and volunteer dependency.
 
 ## Run locally
 
@@ -45,12 +45,13 @@ That's it. Streamlit auto-detects `requirements.txt`.
 - Use fixed seed for reproducible results
 
 **Main panel:**
-- Edit staff table directly (add rows, change names, hours, availability flags)
+- Edit staff table (name, weekly hours, night/Sunday availability)
 - Set coverage constraints (min staff per shift)
-- Click **Generate** to create the schedule
-- Click **Regenerate** for a different variant with the same staff
+- Optionally add a new employee for scenario comparison
+- Click **Generate** or **Regenerate** for a different variant
 
 **Outputs:**
+- Comparison table across scenarios
 - Weekly calendar view with highlighted gaps
 - Hours summary per person with bar chart
 - Download buttons: CSV, Excel, PDF
@@ -77,11 +78,20 @@ That's it. Streamlit auto-detects `requirements.txt`.
 └── README.md
 ```
 
-## Documentation
+## Documentation & Analysis
 
 See the [analysis/](analysis/) folder for detailed documentation:
+- [Final Analysis](analysis/Final_Analysis.md) - Complete 5-week scheduling analysis with KPIs, scenario comparison, risk assessment, and operational recommendations
 - [Problem Analysis](analysis/Problem_Analysis.md) - Context and approach
 - [Constraints and Assumptions](analysis/Constraints_and_Assumptions.md) - Rules and parameters
+
+### Analysis Highlights
+
+The analysis evaluates two staffing scenarios for a healthcare facility:
+- **Base scenario** (5 employees): 92.3% coverage - leaves 5 Sundays uncovered
+- **+1 employee scenario**: 100% coverage - recommended solution
+
+Key findings include individual KPIs, weekend distribution imbalance, contract compliance verification, and strategic recommendations for workforce optimization.
 
 ## Tech stack
 
